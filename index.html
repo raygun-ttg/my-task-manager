@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>My Task Manager</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -15,28 +16,13 @@
       padding: 2rem 1rem;
     }
 
-    #app {
-      max-width: 580px;
-      margin: 0 auto;
-    }
+    #app { max-width: 580px; margin: 0 auto; }
 
-    h1 {
-      font-size: 28px;
-      font-weight: 600;
-      margin-bottom: 4px;
-    }
+    h1 { font-size: 28px; font-weight: 600; margin-bottom: 4px; }
 
-    .subtitle {
-      font-size: 14px;
-      color: #888;
-      margin-bottom: 1.5rem;
-    }
+    .subtitle { font-size: 14px; color: #888; margin-bottom: 1.5rem; }
 
-    .add-row {
-      display: flex;
-      gap: 8px;
-      margin-bottom: 1.5rem;
-    }
+    .add-row { display: flex; gap: 8px; margin-bottom: 1.5rem; }
 
     .add-row input {
       flex: 1;
@@ -65,6 +51,7 @@
     }
 
     .add-row button:hover { background: #eee; }
+    .add-row button:disabled { opacity: 0.5; cursor: not-allowed; }
 
     .stats {
       display: grid;
@@ -98,6 +85,17 @@
     }
 
     .filter-btn.active { background: #1a1a1a; color: #fff; border-color: #1a1a1a; }
+
+    .status-bar {
+      font-size: 11px;
+      text-align: right;
+      margin-bottom: 0.5rem;
+      height: 16px;
+      transition: opacity 0.4s;
+    }
+
+    .status-bar.success { color: #1D9E75; }
+    .status-bar.error { color: #e24b4a; }
 
     .task-list { display: flex; flex-direction: column; gap: 6px; }
 
@@ -156,15 +154,7 @@
 
     .empty { text-align: center; padding: 3rem 1rem; color: #bbb; font-size: 14px; }
 
-    .saved-badge {
-      font-size: 11px;
-      color: #1D9E75;
-      text-align: right;
-      margin-bottom: 0.5rem;
-      height: 16px;
-      opacity: 0;
-      transition: opacity 0.4s;
-    }
+    .loading { text-align: center; padding: 3rem 1rem; color: #bbb; font-size: 14px; }
   </style>
 </head>
 <body>
@@ -174,7 +164,7 @@
 
     <div class="add-row">
       <input type="text" id="task-input" placeholder="Add a new task..." />
-      <button onclick="addTask()">+ Add</button>
+      <button id="add-btn" onclick="addTask()">+ Add</button>
     </div>
 
     <div class="stats">
@@ -189,22 +179,26 @@
       <button class="filter-btn" onclick="setFilter('done', this)">Done</button>
     </div>
 
-    <div class="saved-badge" id="saved-badge">✓ Saved</div>
-    <div class="task-list" id="task-list"></div>
+    <div class="status-bar" id="status-bar"></div>
+    <div class="task-list" id="task-list"><div class="loading">Loading your tasks...</div></div>
   </div>
 
   <script>
-    // Load tasks from localStorage, or start fresh if first visit
-    let tasks = JSON.parse(localStorage.getItem('tasks')) || [];
-    let nextId = parseInt(localStorage.getItem('nextId')) || 1;
+    const SUPABASE_URL = 'https://lorbqbgwdshzqdtiqygi.supabase.co';
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxvcmJxYmd3ZHNoenFkdGlxeWdpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUyMjc2NzcsImV4cCI6MjA5MDgwMzY3N30.Dq98qNp0byf0vtva1uZrGgPmWrXqobt7C47GexISHR8';
+
+    const { createClient } = supabase;
+    const db = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    let tasks = [];
     let filter = 'all';
 
-    function save() {
-      localStorage.setItem('tasks', JSON.stringify(tasks));
-      localStorage.setItem('nextId', String(nextId));
-      const badge = document.getElementById('saved-badge');
-      badge.style.opacity = '1';
-      setTimeout(() => { badge.style.opacity = '0'; }, 1500);
+    function showStatus(msg, type = 'success') {
+      const bar = document.getElementById('status-bar');
+      bar.textContent = msg;
+      bar.className = 'status-bar ' + type;
+      bar.style.opacity = '1';
+      setTimeout(() => { bar.style.opacity = '0'; }, 2000);
     }
 
     function setFilter(f, btn) {
@@ -214,26 +208,48 @@
       render();
     }
 
-    function addTask() {
+    async function loadTasks() {
+      const { data, error } = await db.from('tasks').select('*').order('created_at', { ascending: true });
+      if (error) { showStatus('Could not load tasks', 'error'); return; }
+      tasks = data;
+      render();
+    }
+
+    async function addTask() {
       const input = document.getElementById('task-input');
       const text = input.value.trim();
       if (!text) return;
-      tasks.push({ id: nextId++, text, done: false });
+
+      const btn = document.getElementById('add-btn');
+      btn.disabled = true;
       input.value = '';
-      save();
-      render();
+
+      const { data, error } = await db.from('tasks').insert([{ text, done: false }]).select();
+      if (error) {
+        showStatus('Could not add task', 'error');
+      } else {
+        tasks.push(data[0]);
+        showStatus('✓ Task added');
+        render();
+      }
+      btn.disabled = false;
     }
 
-    function toggleTask(id) {
+    async function toggleTask(id) {
       const t = tasks.find(t => t.id === id);
-      if (t) t.done = !t.done;
-      save();
+      if (!t) return;
+      const { error } = await db.from('tasks').update({ done: !t.done }).eq('id', id);
+      if (error) { showStatus('Could not update task', 'error'); return; }
+      t.done = !t.done;
+      showStatus('✓ Saved');
       render();
     }
 
-    function deleteTask(id) {
+    async function deleteTask(id) {
+      const { error } = await db.from('tasks').delete().eq('id', id);
+      if (error) { showStatus('Could not delete task', 'error'); return; }
       tasks = tasks.filter(t => t.id !== id);
-      save();
+      showStatus('✓ Deleted');
       render();
     }
 
@@ -269,7 +285,7 @@
       if (e.key === 'Enter') addTask();
     });
 
-    render();
+    loadTasks();
   </script>
 </body>
 </html>
